@@ -1,0 +1,12 @@
+{
+  "Name": "scanner",
+  "ID": "{{AquaHelmContractTestScannerID}}",
+  "RoleArn": "{{AquaHelmContractTestHelmRoleArn}}",
+  "ClusterID": "{{AquaHelmContractTestClusterName}}",
+  "Namespace": "aqua",
+  "Values": {
+    "user": "scanner",
+    "password": "{{AquaHelmContractTestScannerPassword}}",
+    "server.serviceName": "aquapre-console-svc"
+  }
+}
