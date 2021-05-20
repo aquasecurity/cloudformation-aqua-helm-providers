@@ -1,0 +1,10 @@
+{
+  "Name": "aqua-enforcer",
+  "ID": "{{AquaHelmContractTestEnforcerID}}",
+  "RoleArn": "{{AquaHelmContractTestHelmRoleArn}}",
+  "Namespace": "aqua",
+  "Values": {
+    "imageCredentials.create": "false",
+    "enforcerToken": "{{AquaHelmContractTestEnforcerToken}}"
+  }
+}

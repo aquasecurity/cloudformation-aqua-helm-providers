@@ -1,0 +1,500 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  ClusterName:
+    Type: String
+    Default: aqua-contract-test
+  ImageCredentialsUsername:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /cloudformation-contract-test/ImageCredentialsUsername
+  ImageCredentialsPassword:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /cloudformation-contract-test/ImageCredentialsPassword
+  AdminPassword:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /cloudformation-contract-test/AdminPassword
+  LicenseToken:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /cloudformation-contract-test/LicenseToken
+  KubernetesHelmRoleArn:
+    Type: String
+    Description: Role arn for the role used by the AWSQS::Kubernetes::Helm resource type
+  KubernetesGetRoleArn:
+    Type: String
+    Description: Role arn for the role used by the AWSQS::Kubernetes::Get resource type
+  KubernetesResourceRoleArn:
+    Type: String
+    Description: Role arn for the role used by the AWSQS::Kubernetes::Resource resource type
+Conditions:
+  UseKubernetesHelmRoleArn: !Not [!Equals [!Ref KubernetesHelmRoleArn, ""]]
+  UseKubernetesGetRoleArn: !Not [!Equals [!Ref KubernetesGetRoleArn, ""]]
+  UseKubernetesResourceRoleArn: !Not [!Equals [!Ref KubernetesResourceRoleArn, ""]]
+Resources:
+  ControlPlaneRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Policies:
+        - PolicyName: ec2-describe-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeAddresses
+                  - ec2:DescribeInternetGateways
+                Resource: '*'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKSClusterPolicy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKSServicePolicy'
+  HelmRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Policies:
+        - PolicyName: helm-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - kms:Decrypt
+                  - eks:DescribeCluster
+                  - s3:GetObject
+                  - sts:AssumeRole
+                  - iam:PassRole
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - ec2:Describe*
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - lambda:*
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:PutMetricData
+                  - cloudformation:ListExports
+                Resource: '*'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - resources.cloudformation.amazonaws.com
+                - cloudformation.amazonaws.com
+              AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonS3ReadOnlyAccess'
+  ControlPlaneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Cluster communication
+      VpcId: !ImportValue helm-resource-provider-contract-tests-vpc-VPCID
+  Cluster:
+    Type: "AWSQS::EKS::Cluster"
+    Properties:
+      Name: !Ref ClusterName
+      RoleArn: !GetAtt ControlPlaneRole.Arn
+      KubernetesNetworkConfig:
+        ServiceIpv4Cidr: "192.168.0.0/16"
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !ImportValue helm-resource-provider-contract-tests-vpc-PrivateSubnet1AID
+          - !ImportValue helm-resource-provider-contract-tests-vpc-PrivateSubnet2AID
+        SecurityGroupIds:
+          - !Ref ControlPlaneSecurityGroup
+        PublicAccessCidrs:
+          - 0.0.0.0/0
+        EndpointPublicAccess: true
+      KubernetesApiAccess:
+        Roles:
+          - Arn: !If [UseKubernetesHelmRoleArn, !Ref KubernetesHelmRoleArn, !Sub "arn:aws:iam::${AWS::AccountId}:role/awsqs-kubernetes-helm"]
+            Username: "AWSQSKubernetesHelmRole"
+            Groups: [ "system:masters" ]
+          - Arn: !If [UseKubernetesResourceRoleArn, !Ref KubernetesResourceRoleArn, !Sub "arn:aws:iam::${AWS::AccountId}:role/awsqs-kubernetes-resource"]
+            Username: "AWSQSKubernetesResourceRole"
+            Groups: [ "system:masters" ]
+          - Arn: !If [UseKubernetesGetRoleArn, !Ref KubernetesGetRoleArn, !Sub "arn:aws:iam::${AWS::AccountId}:role/awsqs-kubernetes-get"]
+            Username: "AWSQSKubernetesGetRole"
+            Groups: [ "system:masters" ]
+          - Arn: !GetAtt HelmRole.Arn
+            Username: "AdminRole"
+            Groups: [ "system:masters" ]
+  WorkerRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly'
+  EKSNodegroup:
+    Type: 'AWS::EKS::Nodegroup'
+    Properties:
+      ClusterName: !Ref Cluster
+      NodeRole: !GetAtt WorkerRole.Arn
+      ScalingConfig:
+        MinSize: 2
+        DesiredSize: 2
+        MaxSize: 3
+      Subnets:
+        - !ImportValue helm-resource-provider-contract-tests-vpc-PrivateSubnet1AID
+        - !ImportValue helm-resource-provider-contract-tests-vpc-PrivateSubnet2AID
+  IDGenRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+  IDGenFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Timeout: 300
+      Runtime: python3.7
+      Handler: index.handler
+      Role: !GetAtt IDGenRole.Arn
+      Code:
+        ZipFile: !Sub |
+          import json
+          import base64
+          import cfnresponse
+          import logging
+
+
+          def handler(event, context):
+              print(event)
+              status = cfnresponse.SUCCESS
+              physical_id = event.get('PhysicalResourceId')
+              responseData = {}
+              try:
+                  if  (event['RequestType'] == 'Create' or event['RequestType'] == 'Update'):
+                      id = {
+                          "ClusterID": event['ResourceProperties']['ClusterID'],
+                          "Region": event['ResourceProperties']['Region'],
+                          "Name": event['ResourceProperties']['Name'],
+                          "Namespace": event['ResourceProperties']['Namespace']
+                      }
+
+                      responseData['ID'] = base64.standard_b64encode(bytes(json.dumps(id), encoding='utf8')).decode("utf-8")[:-1]
+                      print(responseData['ID'])
+              except Exception:
+                  logging.error('Unhandled exception', exc_info=True)
+                  status = cfnresponse.FAILED
+              finally:
+                  cfnresponse.send(event, context, status, responseData, physicalResourceId=physical_id)
+  AquaPreFunction:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Timeout: 300
+      Runtime: python3.7
+      Handler: index.handler
+      Role: !GetAtt IDGenRole.Arn
+      Code:
+        ZipFile: !Sub |
+          import json
+          import base64
+          import cfnresponse
+          import urllib3
+          import logging
+
+          LoginPath = "/api/v1/login"
+          UserPath = "/api/v1/users"
+          EnforcerPath = "/api/v1/hostsbatch"
+
+          urllib3.disable_warnings()
+          http = urllib3.PoolManager(cert_reqs='CERT_NONE',retries=urllib3.util.Retry(total=30, backoff_factor=1.0))
+          Headers = {
+                  'Content-Type': 'application/json'
+                  }
+
+          def getLoginToken(endpoint, password):
+              url = "https://" + endpoint + LoginPath
+              payload = json.dumps({
+                          "id": "administrator",
+                          "password": password
+                      })
+              response = http.request("POST", url, headers=Headers, body=payload)
+
+              if response.status != 200:
+                  raise Exception("Unknown status:" + str(response.status))
+
+              data = json.loads(response.data.decode('utf-8'))
+
+              return "Bearer " + data['token']
+
+
+          def createUser(endpoint, password, token):
+              payload = json.dumps({
+                          "id": "scanner",
+                          "name": "Scanner",
+                          "password": password,
+                          "role": "Scanner"
+                      })
+              Headers['Authorization'] = token
+              url = "https://" + endpoint + UserPath
+              response = http.request("POST", url, headers=Headers, body=payload)
+
+              if response.status != 204:
+                  raise Exception("Unknown status:" + str(response.status))
+              print("User created")
+
+          def getKEnforcerToken(endpoint, password, token):
+              Headers['Authorization'] = token
+              url = "https://" + endpoint + EnforcerPath
+              response = http.request("GET", url, headers=Headers)
+
+              if response.status != 200:
+                  raise Exception("Unknown status:" + str(response.status))
+
+              data = json.loads(response.data.decode('utf-8'))
+
+              for enc in data:
+                  if enc['type'] == "kube_enforcer":
+                      return enc['token']
+
+              raise Exception("Kube enforcer not found")
+
+          def getEnforcerToken(endpoint, password, token):
+              Headers['Authorization'] = token
+              url = "https://" + endpoint + EnforcerPath
+              response = http.request("GET", url, headers=Headers)
+
+              if response.status != 200:
+                  raise Exception("Unknown status:" + str(response.status))
+
+              data = json.loads(response.data.decode('utf-8'))
+
+              for enc in data:
+                  if enc['type'] == "agent":
+                      return enc['token']
+
+              raise Exception("Default enforcer not found")
+
+          def handler(event, context):
+              status = cfnresponse.SUCCESS
+              physical_id = event.get('PhysicalResourceId')
+              responseData = {}
+              try:
+                  if  event['RequestType'] == 'Create':
+
+                      token = getLoginToken(event['ResourceProperties']['Endpoint'], event['ResourceProperties']['Password'])
+
+                      createUser(event['ResourceProperties']['Endpoint'], event['ResourceProperties']['Password'], token)
+
+                      responseData['knToken'] = getKEnforcerToken(event['ResourceProperties']['Endpoint'], event['ResourceProperties']['Password'], token)
+                      responseData['eToken'] = getEnforcerToken(event['ResourceProperties']['Endpoint'], event['ResourceProperties']['Password'], token)
+
+                      print(responseData['knToken'])
+                      print(responseData['eToken'])
+
+              except Exception:
+                  logging.error('Unhandled exception', exc_info=True)
+                  status = cfnresponse.FAILED
+              finally:
+                  cfnresponse.send(event, context, status, responseData, physicalResourceId=physical_id)
+  AquaNamespace:
+    Type: "AWSQS::Kubernetes::Resource"
+    Properties:
+      ClusterName: !Ref Cluster
+      Namespace: default
+      Manifest: !Sub |
+        kind: Namespace
+        apiVersion: v1
+        metadata:
+          name: aqua
+  AquaSecret:
+    Type: "AWSQS::Kubernetes::Resource"
+    DependsOn: AquaNamespace
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: aqua
+      Manifest: !Sub
+        - |
+          kind: Secret
+          apiVersion: v1
+          metadata:
+            name: aqua-registry-secret
+          type: kubernetes.io/dockerconfigjson
+          data:
+            .dockerconfigjson: ${DockerCfg}
+        - DockerCfg:
+            Fn::Base64:
+              !Sub
+              - |
+                 {
+                   "auths": {
+                     "registry.aquasec.com": {
+                       "username": "${ImageCredentialsUsername}",
+                       "password": "${ImageCredentialsPassword}",
+                       "email": "${ImageCredentialsUsername}",
+                       "auth": "${Auth}"
+                     }
+                   }
+                 }
+              - Auth:
+                  Fn::Base64:
+                    !Sub "${ImageCredentialsUsername}:${ImageCredentialsPassword}"
+  # For aqua server
+  AquaServerNamespace:
+    Type: "AWSQS::Kubernetes::Resource"
+    Properties:
+      ClusterName: !Ref Cluster
+      Namespace: default
+      Manifest: !Sub |
+        kind: Namespace
+        apiVersion: v1
+        metadata:
+          name: aquaserver
+  AquaServerSecret:
+    Type: "AWSQS::Kubernetes::Resource"
+    DependsOn: AquaServerNamespace
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: aquaserver
+      Manifest: !Sub
+        - |
+          kind: Secret
+          apiVersion: v1
+          metadata:
+            name: aquaserver-registry-secret
+          type: kubernetes.io/dockerconfigjson
+          data:
+            .dockerconfigjson: ${DockerCfg}
+        - DockerCfg:
+            Fn::Base64:
+              !Sub
+              - |
+                {
+                  "auths": {
+                    "registry.aquasec.com": {
+                      "username": "${ImageCredentialsUsername}",
+                      "password": "${ImageCredentialsPassword}",
+                      "email": "${ImageCredentialsUsername}",
+                      "auth": "${Auth}"
+                    }
+                  }
+                }
+              - Auth:
+                  Fn::Base64:
+                    !Sub "${ImageCredentialsUsername}:${ImageCredentialsPassword}"
+  AquaPreServer:
+    Type: "AWSQS::Kubernetes::Helm"
+    DependsOn: AquaSecret
+    Properties:
+      Repository: https://helm.aquasec.com
+      Chart: aqua-helm/server
+      ClusterID: !Ref Cluster
+      Name: aquapre
+      Namespace: aqua
+      Values:
+        imageCredentials.create: false
+        platform: eks
+        admin.password: !Ref AdminPassword
+        admin.token: !Ref LicenseToken
+  GetEndPoint:
+    Type: "AWSQS::Kubernetes::Get"
+    DependsOn: AquaPreServer
+    Properties:
+      ClusterName: !Ref ClusterName
+      Namespace: aqua
+      Name: svc/aquapre-console-svc
+      JsonPath: '{.status.loadBalancer.ingress[0].hostname}'
+  AquaPre:
+    Type: "AWS::CloudFormation::CustomResource"
+    Properties:
+      ServiceToken: !GetAtt AquaPreFunction.Arn
+      Endpoint: !GetAtt GetEndPoint.Response
+      Password: !Ref AdminPassword
+  ServerIDGen:
+    Type: "AWS::CloudFormation::CustomResource"
+    Properties:
+      ServiceToken: !GetAtt IDGenFunction.Arn
+      ClusterID: !Ref ClusterName
+      Region: !Ref AWS::Region
+      Name: aquaserver
+      Namespace: aquaserver
+  EnforcerIDGen:
+    Type: "AWS::CloudFormation::CustomResource"
+    Properties:
+      ServiceToken: !GetAtt IDGenFunction.Arn
+      ClusterID: !Ref ClusterName
+      Region: !Ref AWS::Region
+      Name: aqua-enforcer
+      Namespace: aqua
+  ScannerIDGen:
+    Type: "AWS::CloudFormation::CustomResource"
+    Properties:
+      ServiceToken: !GetAtt IDGenFunction.Arn
+      ClusterID: !Ref ClusterName
+      Region: !Ref AWS::Region
+      Name: scanner
+      Namespace: aqua
+  KubeEnforcerIDGen:
+    Type: "AWS::CloudFormation::CustomResource"
+    Properties:
+      ServiceToken: !GetAtt IDGenFunction.Arn
+      ClusterID: !Ref ClusterName
+      Region: !Ref AWS::Region
+      Name: kube-enforcer
+      Namespace: aqua
+Outputs:
+  ClusterName:
+    Value: !Ref ClusterName
+    Export:
+      Name: AquaHelmContractTestClusterName
+  HelmRoleArn:
+    Value: !GetAtt HelmRole.Arn
+    Export:
+      Name: AquaHelmContractTestHelmRoleArn
+  ServerID:
+    Value: !GetAtt ServerIDGen.ID
+    Export:
+      Name: AquaHelmContractTestServerID
+  EnforcerID:
+    Value: !GetAtt EnforcerIDGen.ID
+    Export:
+      Name: AquaHelmContractTestEnforcerID
+  ScannerID:
+    Value: !GetAtt ScannerIDGen.ID
+    Export:
+      Name: AquaHelmContractTestScannerID
+  KubeEnforcerID:
+    Value: !GetAtt KubeEnforcerIDGen.ID
+    Export:
+      Name: AquaHelmContractTestKubeEnforcerID
+  KubeEnforcerToken:
+    Value: !GetAtt AquaPre.knToken
+    Export:
+      Name: AquaHelmContractTestKubeEnforcerToken
+  EnforcerToken:
+    Value: !GetAtt AquaPre.eToken
+    Export:
+      Name: AquaHelmContractTestEnforcerToken
+  ScannerPassword:
+    Value: !Ref AdminPassword
+    Export:
+      Name: AquaHelmContractTestScannerPassword
+

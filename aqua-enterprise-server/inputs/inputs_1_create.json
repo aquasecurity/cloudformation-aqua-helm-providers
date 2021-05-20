@@ -1,0 +1,12 @@
+{
+  "Name": "aquaserver",
+  "ID": "{{AquaHelmContractTestServerID}}",
+  "RoleArn": "{{AquaHelmContractTestHelmRoleArn}}",
+  "ClusterID": "{{AquaHelmContractTestClusterName}}",
+  "Namespace": "aquaserver",
+  "Values": {
+    "imageCredentials.create": "false",
+    "platform": "eks",
+    "web.service.type": "ClusterIP"
+  }
+}
