@@ -15,19 +15,9 @@ Parameters:
   LicenseToken:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /cloudformation-contract-test/LicenseToken
-  KubernetesHelmRoleArn:
-    Type: String
-    Description: Role arn for the role used by the AWSQS::Kubernetes::Helm resource type
-  KubernetesGetRoleArn:
-    Type: String
-    Description: Role arn for the role used by the AWSQS::Kubernetes::Get resource type
   KubernetesResourceRoleArn:
     Type: String
-    Description: Role arn for the role used by the AWSQS::Kubernetes::Resource resource type
-Conditions:
-  UseKubernetesHelmRoleArn: !Not [!Equals [!Ref KubernetesHelmRoleArn, ""]]
-  UseKubernetesGetRoleArn: !Not [!Equals [!Ref KubernetesGetRoleArn, ""]]
-  UseKubernetesResourceRoleArn: !Not [!Equals [!Ref KubernetesResourceRoleArn, ""]]
+    Description: Role arn for the role used by the resource types
 Resources:
   ControlPlaneRole:
     Type: "AWS::IAM::Role"
@@ -118,14 +108,8 @@ Resources:
         EndpointPublicAccess: true
       KubernetesApiAccess:
         Roles:
-          - Arn: !If [UseKubernetesHelmRoleArn, !Ref KubernetesHelmRoleArn, !Sub "arn:aws:iam::${AWS::AccountId}:role/awsqs-kubernetes-helm"]
-            Username: "AWSQSKubernetesHelmRole"
-            Groups: [ "system:masters" ]
-          - Arn: !If [UseKubernetesResourceRoleArn, !Ref KubernetesResourceRoleArn, !Sub "arn:aws:iam::${AWS::AccountId}:role/awsqs-kubernetes-resource"]
-            Username: "AWSQSKubernetesResourceRole"
-            Groups: [ "system:masters" ]
-          - Arn: !If [UseKubernetesGetRoleArn, !Ref KubernetesGetRoleArn, !Sub "arn:aws:iam::${AWS::AccountId}:role/awsqs-kubernetes-get"]
-            Username: "AWSQSKubernetesGetRole"
+          - Arn: !Ref KubernetesResourceRoleArn
+            Username: "KubernetesResourceRoleArn"
             Groups: [ "system:masters" ]
           - Arn: !GetAtt HelmRole.Arn
             Username: "AdminRole"
